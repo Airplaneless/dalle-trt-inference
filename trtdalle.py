@@ -47,13 +47,12 @@ if __name__ == '__main__':
     TOPK = int(sys.argv[3])
     SFACTOR = int(sys.argv[4])
     SEED = int(sys.argv[5])
-    NSTEPS = int(sys.argv[6])
-    SRGAN_PSNR = bool(sys.argv[7])
-    DIR = str(sys.argv[8])
+    SRGAN_PSNR = bool(int(sys.argv[6]))
+    DIR = str(sys.argv[7])
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
     os.makedirs(DIR, exist_ok=True)
-    print(TEXT, TEMPERATURE, TOPK, SFACTOR, SEED, NSTEPS, SRGAN_PSNR, DIR)
+    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nSRGAN_PSNR={SRGAN_PSNR}\nDIR={DIR}")
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
@@ -70,7 +69,7 @@ if __name__ == '__main__':
     with open("engines/decoder1.trt", mode="rb") as f:
         engine1 = runtime.deserialize_cuda_engine(f.read())
         context1 = engine1.create_execution_context()
-    with open("engines/decoder2.trt", mode="rb") as f:
+    with open("engines/decoder2.trt32", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
     with open("engines/srgan_psnr.trt" if SRGAN_PSNR else "onnx/srgan.trt", mode="rb") as f:
@@ -90,7 +89,8 @@ if __name__ == '__main__':
     ort_inputs = {ort_session1.get_inputs()[0].name: to_numpy(ort_outs[0]), ort_session1.get_inputs()[1].name: to_numpy(text_tokens)}
     ort_outs = ort_session1.run(None, ort_inputs)
     encoder_state = torch.from_numpy(ort_outs[0])
-    for seed_add in range(NSTEPS):
+    seed_add = 0
+    while True:
         expanded_indices = [0] * image_count + [1] * image_count
         text_tokens = text_tokens[expanded_indices]
         encoder_state = encoder_state[expanded_indices]
@@ -164,3 +164,4 @@ if __name__ == '__main__':
             image_path = os.path.join(DIR, f'{SEED + seed_add}_{i}.png')
             print(image_path)
             Image.fromarray((image_outputs[i] * 255.).astype(numpy.uint8)).save(image_path)
+        seed_add += 1

@@ -31,7 +31,7 @@ if __name__ == '__main__':
         device='cpu'
     )
 
-    encoder_state = torch.load('/tmp/tmp-dalle.pt')
+    encoder_state = torch.randn(2, 64, 2048)
     print('encoder: ', text_tokens.dtype, text_tokens.shape)
     torch.cuda.empty_cache()
 
