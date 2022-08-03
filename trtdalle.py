@@ -162,7 +162,7 @@ if __name__ == '__main__':
                 img = numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.
                 img = numpy.moveaxis(img.reshape(3,256,256), 0, -1).clip(0, 1)
                 image_outputs.append(img)
-            grid = torchvision.utils.make_grid(torch.stack([torch.from_numpy(v).swapaxes(-1,0) for v in image_outputs]), nrow=4).numpy()
+            grid = torchvision.utils.make_grid(torch.stack([torch.from_numpy(v).swapaxes(-1,0) for v in image_outputs]), nrow=INUM).numpy()
             grid_path = os.path.join(DIR, f'grid_{SEED + seed_add}.png')
             Image.fromarray((grid * 255.).astype(numpy.uint8).swapaxes(0,-1)).save(grid_path)
             for i in range(len(image_outputs)):
