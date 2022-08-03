@@ -166,7 +166,7 @@ if __name__ == '__main__':
                 Image.fromarray((image_outputs[i] * 255.).astype(numpy.uint8)).save(image_path)
             seed_add += 1
     except KeyboardInterrupt:
-        print('Generation Interrupted, running ESRGAN')
+        print('\nGeneration Interrupted, running ESRGAN')
         del engine0, engine1, engine2, context0, context1, context2, stream
         stream = cuda.Stream()
         with open(f"engines/esrgan1x{VQGAN_ASPECT}.trt", mode="rb") as f:
@@ -183,7 +183,7 @@ if __name__ == '__main__':
                 patches = np.swapaxes(np.swapaxes(patches, 1, 2), 1, 3)
                 numpy.copyto(inputs[0].host, patches.ravel() / 255.)
                 res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
-                np_sr_image = res.reshape(4, 1920, 1920 * VQGAN_ASPECT, 3)
+                np_sr_image = res.reshape(4 if VQGAN_ASPECT == 1 else 6, 1920, 1920, 3)
                 padded_size_scaled = tuple(np.multiply(p_shape[0:2], 8)) + (3,)
                 scaled_image_shape = tuple(np.multiply(lr_image.shape[0:2], 8)) + (3,)
                 np_sr_image = stich_together(np_sr_image, padded_image_shape=padded_size_scaled, target_shape=scaled_image_shape, padding_size=24 * 8)

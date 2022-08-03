@@ -27,7 +27,7 @@ if __name__ == '__main__':
     for p in model.parameters():
         p.requires_grad = False
     inputs = (
-        torch.randn((4, 3, 240, 240)),
+        torch.randn((6, 3, 240, 240)),
     )
-    torch.onnx.export(model, inputs, f'./onnx/esrgan1x1.onnx', output_names=['z'], verbose=True, opset_version=15, export_params=True, do_constant_folding=True)
+    torch.onnx.export(model, inputs, f'./onnx/esrgan1x2.onnx', output_names=['z'], verbose=True, opset_version=15, export_params=True, do_constant_folding=True)
 
