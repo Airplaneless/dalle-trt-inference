@@ -184,3 +184,28 @@ class VQGanDetokenizer(nn.Module):
         z = z.permute(0, 2, 3, 1)
         z = z.clip(0.0, 1.0) * 255
         return z
+
+
+class VQGanDetokenizerB(nn.Module):
+    def __init__(self):
+        super().__init__()
+        vocab_count, embed_count = 2 ** 14, 2 ** 8
+        self.vocab_count = vocab_count
+        self.embedding = nn.Embedding(vocab_count, embed_count)
+        self.post_quant_conv = nn.Conv2d(embed_count, embed_count, 1)
+        self.decoder = Decoder()
+        self.dx = 1
+        self.dy = 1
+
+    def forward(self, z: LongTensor) -> FloatTensor:
+        z.clamp_(0, self.vocab_count - 1)
+        t1 = self.dx * 2 ** 4
+        t2 = self.dy * 2 ** 4
+        z = self.embedding.forward(z)
+        z = z.view((z.shape[0], t1, t2, 2 ** 8))
+        z = z.permute(0, 3, 1, 2).contiguous()
+        z = self.post_quant_conv.forward(z)
+        z = self.decoder.forward(z, t1, t2)
+        z = z.permute(0, 2, 3, 1)
+        z = z.clip(0.0, 1.0) * 255
+        return z

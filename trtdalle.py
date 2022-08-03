@@ -5,6 +5,7 @@ import numpy
 import pylab as plt
 import json
 import torch
+import torchvision
 import pycuda.autoinit
 import pycuda.driver as cuda
 import tensorrt as trt
@@ -16,6 +17,7 @@ onnxruntime.disable_telemetry_events()
 from dalle import TextTokenizer
 from utils_sr import *
 from PIL import Image
+from tqdm import tqdm
 
 
 class HostDeviceMem(object):
@@ -49,21 +51,19 @@ if __name__ == '__main__':
     TOPK = int(sys.argv[3])
     SFACTOR = int(sys.argv[4])
     SEED = int(sys.argv[5])
-    VQGAN_ASPECT = int(sys.argv[6])
-    DIR = str(sys.argv[7])
+    DIR = str(sys.argv[6])
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
-    assert VQGAN_ASPECT in [1,2]
     assert SEED >= 0
     os.makedirs(DIR, exist_ok=True)
-    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nVQGAN_ASPECT={VQGAN_ASPECT}\nDIR={DIR}")
+    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nDIR={DIR}")
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
     ort_session0 = onnxruntime.InferenceSession('./onnx/encoder0/encoder0.onnx', providers=['CPUExecutionProvider'])
     ort_session1 = onnxruntime.InferenceSession('./onnx/encoder1/encoder1.onnx', providers=['CPUExecutionProvider'])
-    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan1x{VQGAN_ASPECT}.onnx', providers=['CPUExecutionProvider'])
+    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan4x4.onnx', providers=['CPUExecutionProvider'])
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
@@ -108,9 +108,9 @@ if __name__ == '__main__':
             encoder_state = encoder_state[expanded_indices]
             attention_mask = text_tokens.not_equal(1).long()
             attention_state = torch.zeros(size=(24, image_count * 4, 256, 2048))
-            image_tokens = torch.full((256 + 1, image_count), 16415, dtype=torch.long)
+            image_tokens = torch.full((256 * 16 + 1, image_count), 16415, dtype=torch.long)
             if SEED > 0: torch.manual_seed(SEED + seed_add)
-            token_indices = torch.arange(256)
+            token_indices = torch.arange(256).repeat(16)
             settings = torch.tensor([TEMPERATURE, TOPK, SFACTOR])
             numpy.copyto(tAM.host, to_numpy(attention_mask).ravel())
             numpy.copyto(tES.host, to_numpy(encoder_state).ravel())
@@ -122,7 +122,7 @@ if __name__ == '__main__':
             cuda.memcpy_htod_async(tAS0.device, tAS0.host, stream)
             cuda.memcpy_htod_async(tAS1.device, tAS1.host, stream)
             cuda.memcpy_htod_async(tAS2.device, tAS2.host, stream)
-            for i in range(256):
+            for i in tqdm(range(256 * 16)):
                 numpy.copyto(tIT.host, to_numpy(image_tokens[i]).ravel())
                 numpy.copyto(tTI.host, to_numpy(token_indices[[i]]).ravel())
                 cuda.memcpy_htod_async(tIT.device, tIT.host, stream)
@@ -153,15 +153,18 @@ if __name__ == '__main__':
                 logits.exp_()
                 logits *= is_kept.to(torch.float32)
                 image_tokens[i + 1] = torch.multinomial(logits, 1)[:, 0]
-            ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T)}
+            ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T.reshape(-1, 256))}
             images = ort_session2.run(None, ort_inputs)[0]
             image_outputs = []
             for i in range(images.shape[0]):
                 img = numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.
-                img = numpy.moveaxis(img.reshape(3,256,256 * VQGAN_ASPECT), 0, -1).clip(0, 1)
+                img = numpy.moveaxis(img.reshape(3,256,256), 0, -1).clip(0, 1)
                 image_outputs.append(img)
+            grid = torchvision.utils.make_grid(torch.stack([torch.from_numpy(v).swapaxes(-1,0) for v in image_outputs]), nrow=4).numpy()
+            grid_path = os.path.join(DIR, f'grid_{SEED + seed_add}.png')
+            Image.fromarray((grid * 255.).astype(numpy.uint8).swapaxes(0,-1)).save(grid_path)
             for i in range(len(image_outputs)):
-                image_path = os.path.join(DIR, f'{SEED + seed_add}_{i}.png')
+                image_path = os.path.join(DIR, f'image_{SEED + seed_add}_{i}.png')
                 print(image_path)
                 Image.fromarray((image_outputs[i] * 255.).astype(numpy.uint8)).save(image_path)
             seed_add += 1
@@ -169,12 +172,12 @@ if __name__ == '__main__':
         print('\nGeneration Interrupted, running ESRGAN')
         del engine0, engine1, engine2, context0, context1, context2, stream
         stream = cuda.Stream()
-        with open(f"engines/esrgan1x{VQGAN_ASPECT}.trt", mode="rb") as f:
+        with open(f"engines/esrgan1x1.trt", mode="rb") as f:
             engine3 = runtime.deserialize_cuda_engine(f.read())
             context3 = engine3.create_execution_context()
         inputs, outputs, bindings = common.allocate_buffers(engine3)
         for fname in os.listdir(DIR):
-            if not fname.startswith('sr_'):
+            if fname.startswith('image_'):
                 lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
                 lr_image = np.array(lr_image)
                 lr_image = pad_reflect(lr_image, 15)
@@ -183,7 +186,7 @@ if __name__ == '__main__':
                 patches = np.swapaxes(np.swapaxes(patches, 1, 2), 1, 3)
                 numpy.copyto(inputs[0].host, patches.ravel() / 255.)
                 res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
-                np_sr_image = res.reshape(4 if VQGAN_ASPECT == 1 else 6, 1920, 1920, 3)
+                np_sr_image = res.reshape(4, 1920, 1920, 3)
                 padded_size_scaled = tuple(np.multiply(p_shape[0:2], 8)) + (3,)
                 scaled_image_shape = tuple(np.multiply(lr_image.shape[0:2], 8)) + (3,)
                 np_sr_image = stich_together(np_sr_image, padded_image_shape=padded_size_scaled, target_shape=scaled_image_shape, padding_size=24 * 8)
