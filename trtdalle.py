@@ -1,3 +1,4 @@
+#!/usr/bin/python
 import os
 import sys
 import numpy
@@ -47,19 +48,21 @@ if __name__ == '__main__':
     TOPK = int(sys.argv[3])
     SFACTOR = int(sys.argv[4])
     SEED = int(sys.argv[5])
-    SRGAN_PSNR = bool(int(sys.argv[6]))
+    VQGAN_ASPECT = int(sys.argv[6])
     DIR = str(sys.argv[7])
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
+    assert VQGAN_ASPECT in [1,2]
+    assert SEED >= 0
     os.makedirs(DIR, exist_ok=True)
-    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nSRGAN_PSNR={SRGAN_PSNR}\nDIR={DIR}")
+    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nVQGAN_ASPECT={VQGAN_ASPECT}\nDIR={DIR}")
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
     ort_session0 = onnxruntime.InferenceSession('./onnx/encoder0/encoder0.onnx', providers=['CPUExecutionProvider'])
     ort_session1 = onnxruntime.InferenceSession('./onnx/encoder1/encoder1.onnx', providers=['CPUExecutionProvider'])
-    ort_session2 = onnxruntime.InferenceSession('engines/vqgan.onnx', providers=['CPUExecutionProvider'])
+    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan1x{VQGAN_ASPECT}.onnx', providers=['CPUExecutionProvider'])
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
@@ -69,10 +72,10 @@ if __name__ == '__main__':
     with open("engines/decoder1.trt", mode="rb") as f:
         engine1 = runtime.deserialize_cuda_engine(f.read())
         context1 = engine1.create_execution_context()
-    with open("engines/decoder2.trt32", mode="rb") as f:
+    with open("engines/decoder2.trt" if VQGAN_ASPECT == 2 else "engines/decoder2.trt32", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
-    with open("engines/srgan_psnr.trt" if SRGAN_PSNR else "onnx/srgan.trt", mode="rb") as f:
+    with open(f"engines/srgan1x{VQGAN_ASPECT}.trt", mode="rb") as f:
         engine3 = runtime.deserialize_cuda_engine(f.read())
         context3 = engine3.create_execution_context()
     tokens = tokenizer.tokenize(TEXT, is_verbose=False)[:64]
@@ -100,6 +103,7 @@ if __name__ == '__main__':
     tAS0 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
     tAS1 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
     tAS2 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
+    inputs, outputs, bindings = common.allocate_buffers(engine3)
     while True:
         expanded_indices = [0] * image_count + [1] * image_count
         text_tokens = text_tokens[expanded_indices]
@@ -155,10 +159,9 @@ if __name__ == '__main__':
         images = ort_session2.run(None, ort_inputs)[0]
         image_outputs = []
         for i in range(images.shape[0]):
-            inputs, outputs, bindings = common.allocate_buffers(engine3)
             numpy.copyto(inputs[0].host, numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.)
             img = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
-            img = numpy.moveaxis(img.reshape(3,1024,1024), 0, -1).clip(0, 1)
+            img = numpy.moveaxis(img.reshape(3,1024,1024 * VQGAN_ASPECT), 0, -1).clip(0, 1)
             image_outputs.append(img)
         for i in range(len(image_outputs)):
             image_path = os.path.join(DIR, f'{SEED + seed_add}_{i}.png')
