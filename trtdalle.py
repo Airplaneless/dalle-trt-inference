@@ -51,19 +51,21 @@ if __name__ == '__main__':
     TOPK = int(sys.argv[3])
     SFACTOR = int(sys.argv[4])
     SEED = int(sys.argv[5])
-    DIR = str(sys.argv[6])
+    INUM = int(sys.argv[6])
+    DIR = str(sys.argv[7])
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
     assert SEED >= 0
+    assert INUM in [1, 2, 3, 4]
     os.makedirs(DIR, exist_ok=True)
-    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nDIR={DIR}")
+    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nINUM={INUM}\nDIR={DIR}")
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
     ort_session0 = onnxruntime.InferenceSession('./onnx/encoder0/encoder0.onnx', providers=['CPUExecutionProvider'])
     ort_session1 = onnxruntime.InferenceSession('./onnx/encoder1/encoder1.onnx', providers=['CPUExecutionProvider'])
-    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan4x4.onnx', providers=['CPUExecutionProvider'])
+    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan{INUM}x{INUM}.onnx', providers=['CPUExecutionProvider'])
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
@@ -108,9 +110,9 @@ if __name__ == '__main__':
             encoder_state = encoder_state[expanded_indices]
             attention_mask = text_tokens.not_equal(1).long()
             attention_state = torch.zeros(size=(24, image_count * 4, 256, 2048))
-            image_tokens = torch.full((256 * 16 + 1, image_count), 16415, dtype=torch.long)
+            image_tokens = torch.full((256 * INUM*INUM + 1, image_count), 16415, dtype=torch.long)
             if SEED > 0: torch.manual_seed(SEED + seed_add)
-            token_indices = torch.arange(256).repeat(16)
+            token_indices = torch.arange(256).repeat(INUM*INUM)
             settings = torch.tensor([TEMPERATURE, TOPK, SFACTOR])
             numpy.copyto(tAM.host, to_numpy(attention_mask).ravel())
             numpy.copyto(tES.host, to_numpy(encoder_state).ravel())
@@ -122,7 +124,7 @@ if __name__ == '__main__':
             cuda.memcpy_htod_async(tAS0.device, tAS0.host, stream)
             cuda.memcpy_htod_async(tAS1.device, tAS1.host, stream)
             cuda.memcpy_htod_async(tAS2.device, tAS2.host, stream)
-            for i in tqdm(range(256 * 16)):
+            for i in tqdm(range(256 * INUM*INUM)):
                 numpy.copyto(tIT.host, to_numpy(image_tokens[i]).ravel())
                 numpy.copyto(tTI.host, to_numpy(token_indices[[i]]).ravel())
                 cuda.memcpy_htod_async(tIT.device, tIT.host, stream)

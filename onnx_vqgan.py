@@ -21,6 +21,6 @@ if __name__ == '__main__':
     for p in detokenizer.parameters():
         p.requires_grad = False
     inputs = (
-        torch.randint(low=0, high=10000, size=(16, 256), dtype=torch.long),
+        torch.randint(low=0, high=10000, size=(9, 256), dtype=torch.long),
     )
-    torch.onnx.export(detokenizer, inputs, f'onnx/vqgan/vqgan4x4.onnx', output_names=['z'], verbose=True, opset_version=15, export_params=True, do_constant_folding=True)
+    torch.onnx.export(detokenizer, inputs, f'onnx/vqgan/vqgan3x3.onnx', output_names=['z'], verbose=True, opset_version=15, export_params=True, do_constant_folding=True)
