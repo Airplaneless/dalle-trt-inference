@@ -42,6 +42,18 @@ if __name__ == '__main__':
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     numpy.random.seed(42)
+    TEXT = str(sys.argv[1])
+    TEMPERATURE = float(sys.argv[2])
+    TOPK = int(sys.argv[3])
+    SFACTOR = int(sys.argv[4])
+    SEED = int(sys.argv[5])
+    NSTEPS = int(sys.argv[6])
+    SRGAN_PSNR = bool(sys.argv[7])
+    DIR = str(sys.argv[8])
+    DIR = os.path.abspath(DIR)
+    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
+    os.makedirs(DIR, exist_ok=True)
+    print(TEXT, TEMPERATURE, TOPK, SFACTOR, SEED, NSTEPS, SRGAN_PSNR, DIR)
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
@@ -61,20 +73,9 @@ if __name__ == '__main__':
     with open("engines/decoder2.trt", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
-    with open("engines/srgan.trt", mode="rb") as f:
+    with open("engines/srgan_psnr.trt" if SRGAN_PSNR else "onnx/srgan.trt", mode="rb") as f:
         engine3 = runtime.deserialize_cuda_engine(f.read())
         context3 = engine3.create_execution_context()
-    TEXT = str(sys.argv[1])
-    TEMPERATURE = float(sys.argv[2])
-    TOPK = int(sys.argv[3])
-    SFACTOR = int(sys.argv[4])
-    SEED = int(sys.argv[5])
-    NSTEPS = int(sys.argv[6])
-    DIR = str(sys.argv[7])
-    DIR = os.path.abspath(DIR)
-    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
-    os.makedirs(DIR, exist_ok=True)
-    print(TEXT, TEMPERATURE, TOPK, SFACTOR, SEED, NSTEPS, DIR)
     tokens = tokenizer.tokenize(TEXT, is_verbose=False)[:64]
     image_count = 1
     text_tokens = numpy.ones((2, 64), dtype=numpy.int32)
