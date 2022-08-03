@@ -90,6 +90,16 @@ if __name__ == '__main__':
     ort_outs = ort_session1.run(None, ort_inputs)
     encoder_state = torch.from_numpy(ort_outs[0])
     seed_add = 0
+    stream = cuda.Stream()
+    tAM = HostDeviceMem(cuda.pagelocked_empty(128 * image_count, numpy.int32))
+    tES = HostDeviceMem(cuda.pagelocked_empty(262144 * image_count, numpy.float32))
+    tIT = HostDeviceMem(cuda.pagelocked_empty(1 * image_count, numpy.int32))
+    tTI = HostDeviceMem(cuda.pagelocked_empty(1, numpy.int32))
+    tDS = HostDeviceMem(cuda.pagelocked_empty(4096 * image_count, numpy.float32))
+    tOut = HostDeviceMem(cuda.pagelocked_empty(32832 * image_count, numpy.float32))
+    tAS0 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
+    tAS1 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
+    tAS2 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
     while True:
         expanded_indices = [0] * image_count + [1] * image_count
         text_tokens = text_tokens[expanded_indices]
@@ -100,16 +110,6 @@ if __name__ == '__main__':
         if SEED > 0: torch.manual_seed(SEED + seed_add)
         token_indices = torch.arange(256)
         settings = torch.tensor([TEMPERATURE, TOPK, SFACTOR])
-        stream = cuda.Stream()
-        tAM = HostDeviceMem(cuda.pagelocked_empty(128 * image_count, numpy.int32))
-        tES = HostDeviceMem(cuda.pagelocked_empty(262144 * image_count, numpy.float32))
-        tIT = HostDeviceMem(cuda.pagelocked_empty(1 * image_count, numpy.int32))
-        tTI = HostDeviceMem(cuda.pagelocked_empty(1, numpy.int32))
-        tDS = HostDeviceMem(cuda.pagelocked_empty(4096 * image_count, numpy.float32))
-        tOut = HostDeviceMem(cuda.pagelocked_empty(32832 * image_count, numpy.float32))
-        tAS0 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
-        tAS1 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
-        tAS2 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
         numpy.copyto(tAM.host, to_numpy(attention_mask).ravel())
         numpy.copyto(tES.host, to_numpy(encoder_state).ravel())
         numpy.copyto(tAS0.host, to_numpy(attention_state[:8]).ravel())
