@@ -14,6 +14,7 @@ import common
 import onnxruntime
 onnxruntime.disable_telemetry_events()
 from dalle import TextTokenizer
+from utils_sr import *
 from PIL import Image
 
 
@@ -72,12 +73,9 @@ if __name__ == '__main__':
     with open("engines/decoder1.trt", mode="rb") as f:
         engine1 = runtime.deserialize_cuda_engine(f.read())
         context1 = engine1.create_execution_context()
-    with open("engines/decoder2.trt" if VQGAN_ASPECT == 2 else "engines/decoder2.trt32", mode="rb") as f:
+    with open("engines/decoder2.trt32", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
-    with open(f"engines/srgan1x{VQGAN_ASPECT}.trt", mode="rb") as f:
-        engine3 = runtime.deserialize_cuda_engine(f.read())
-        context3 = engine3.create_execution_context()
     tokens = tokenizer.tokenize(TEXT, is_verbose=False)[:64]
     image_count = 1
     text_tokens = numpy.ones((2, 64), dtype=numpy.int32)
@@ -103,68 +101,94 @@ if __name__ == '__main__':
     tAS0 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
     tAS1 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
     tAS2 = HostDeviceMem(cuda.pagelocked_empty(16777216 * image_count, numpy.float32))
-    inputs, outputs, bindings = common.allocate_buffers(engine3)
-    while True:
-        expanded_indices = [0] * image_count + [1] * image_count
-        text_tokens = text_tokens[expanded_indices]
-        encoder_state = encoder_state[expanded_indices]
-        attention_mask = text_tokens.not_equal(1).long()
-        attention_state = torch.zeros(size=(24, image_count * 4, 256, 2048))
-        image_tokens = torch.full((256 + 1, image_count), 16415, dtype=torch.long)
-        if SEED > 0: torch.manual_seed(SEED + seed_add)
-        token_indices = torch.arange(256)
-        settings = torch.tensor([TEMPERATURE, TOPK, SFACTOR])
-        numpy.copyto(tAM.host, to_numpy(attention_mask).ravel())
-        numpy.copyto(tES.host, to_numpy(encoder_state).ravel())
-        numpy.copyto(tAS0.host, to_numpy(attention_state[:8]).ravel())
-        numpy.copyto(tAS1.host, to_numpy(attention_state[8:16]).ravel())
-        numpy.copyto(tAS2.host, to_numpy(attention_state[16:]).ravel())
-        cuda.memcpy_htod_async(tAM.device, tAM.host, stream)
-        cuda.memcpy_htod_async(tES.device, tES.host, stream)
-        cuda.memcpy_htod_async(tAS0.device, tAS0.host, stream)
-        cuda.memcpy_htod_async(tAS1.device, tAS1.host, stream)
-        cuda.memcpy_htod_async(tAS2.device, tAS2.host, stream)
-        for i in range(256):
-            numpy.copyto(tIT.host, to_numpy(image_tokens[i]).ravel())
-            numpy.copyto(tTI.host, to_numpy(token_indices[[i]]).ravel())
-            cuda.memcpy_htod_async(tIT.device, tIT.host, stream)
-            cuda.memcpy_htod_async(tTI.device, tTI.host, stream)
-            queue = [tAM, tES, tAS0, tIT, tTI, tDS, tAS0]
-            context0.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
-            stream.synchronize()
-            queue = [tAM, tES, tDS, tAS1, tTI, tDS, tAS1]
-            context1.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
-            stream.synchronize()
-            queue = [tAM, tES, tDS, tAS2, tTI, tAS2, tOut]
-            context2.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
-            cuda.memcpy_dtoh_async(tOut.host, tOut.device, stream)
-            stream.synchronize()
-            logits = torch.from_numpy(tOut.host).reshape(2, 1, 16416)
-            logits = logits[:, -1, : 2 ** 14]
-            temperature = settings[[0]]
-            top_k = settings[[1]].to(torch.long)
-            supercondition_factor = settings[[2]]
-            logits = (
-                logits[:image_count] * (1 - supercondition_factor) + 
-                logits[image_count:] * supercondition_factor
-            )
-            logits_sorted, _ = logits.sort(descending=True)
-            is_kept = logits >= logits_sorted[:, top_k - 1]
-            logits -= logits_sorted[:, [0]]
-            logits /= temperature
-            logits.exp_()
-            logits *= is_kept.to(torch.float32)
-            image_tokens[i + 1] = torch.multinomial(logits, 1)[:, 0]
-        ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T)}
-        images = ort_session2.run(None, ort_inputs)[0]
-        image_outputs = []
-        for i in range(images.shape[0]):
-            numpy.copyto(inputs[0].host, numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.)
-            img = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
-            img = numpy.moveaxis(img.reshape(3,1024,1024 * VQGAN_ASPECT), 0, -1).clip(0, 1)
-            image_outputs.append(img)
-        for i in range(len(image_outputs)):
-            image_path = os.path.join(DIR, f'{SEED + seed_add}_{i}.png')
-            print(image_path)
-            Image.fromarray((image_outputs[i] * 255.).astype(numpy.uint8)).save(image_path)
-        seed_add += 1
+    try:
+        while True:
+            expanded_indices = [0] * image_count + [1] * image_count
+            text_tokens = text_tokens[expanded_indices]
+            encoder_state = encoder_state[expanded_indices]
+            attention_mask = text_tokens.not_equal(1).long()
+            attention_state = torch.zeros(size=(24, image_count * 4, 256, 2048))
+            image_tokens = torch.full((256 + 1, image_count), 16415, dtype=torch.long)
+            if SEED > 0: torch.manual_seed(SEED + seed_add)
+            token_indices = torch.arange(256)
+            settings = torch.tensor([TEMPERATURE, TOPK, SFACTOR])
+            numpy.copyto(tAM.host, to_numpy(attention_mask).ravel())
+            numpy.copyto(tES.host, to_numpy(encoder_state).ravel())
+            numpy.copyto(tAS0.host, to_numpy(attention_state[:8]).ravel())
+            numpy.copyto(tAS1.host, to_numpy(attention_state[8:16]).ravel())
+            numpy.copyto(tAS2.host, to_numpy(attention_state[16:]).ravel())
+            cuda.memcpy_htod_async(tAM.device, tAM.host, stream)
+            cuda.memcpy_htod_async(tES.device, tES.host, stream)
+            cuda.memcpy_htod_async(tAS0.device, tAS0.host, stream)
+            cuda.memcpy_htod_async(tAS1.device, tAS1.host, stream)
+            cuda.memcpy_htod_async(tAS2.device, tAS2.host, stream)
+            for i in range(256):
+                numpy.copyto(tIT.host, to_numpy(image_tokens[i]).ravel())
+                numpy.copyto(tTI.host, to_numpy(token_indices[[i]]).ravel())
+                cuda.memcpy_htod_async(tIT.device, tIT.host, stream)
+                cuda.memcpy_htod_async(tTI.device, tTI.host, stream)
+                queue = [tAM, tES, tAS0, tIT, tTI, tDS, tAS0]
+                context0.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
+                stream.synchronize()
+                queue = [tAM, tES, tDS, tAS1, tTI, tDS, tAS1]
+                context1.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
+                stream.synchronize()
+                queue = [tAM, tES, tDS, tAS2, tTI, tAS2, tOut]
+                context2.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
+                cuda.memcpy_dtoh_async(tOut.host, tOut.device, stream)
+                stream.synchronize()
+                logits = torch.from_numpy(tOut.host).reshape(2, 1, 16416)
+                logits = logits[:, -1, : 2 ** 14]
+                temperature = settings[[0]]
+                top_k = settings[[1]].to(torch.long)
+                supercondition_factor = settings[[2]]
+                logits = (
+                    logits[:image_count] * (1 - supercondition_factor) + 
+                    logits[image_count:] * supercondition_factor
+                )
+                logits_sorted, _ = logits.sort(descending=True)
+                is_kept = logits >= logits_sorted[:, top_k - 1]
+                logits -= logits_sorted[:, [0]]
+                logits /= temperature
+                logits.exp_()
+                logits *= is_kept.to(torch.float32)
+                image_tokens[i + 1] = torch.multinomial(logits, 1)[:, 0]
+            ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T)}
+            images = ort_session2.run(None, ort_inputs)[0]
+            image_outputs = []
+            for i in range(images.shape[0]):
+                img = numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.
+                img = numpy.moveaxis(img.reshape(3,256,256 * VQGAN_ASPECT), 0, -1).clip(0, 1)
+                image_outputs.append(img)
+            for i in range(len(image_outputs)):
+                image_path = os.path.join(DIR, f'{SEED + seed_add}_{i}.png')
+                print(image_path)
+                Image.fromarray((image_outputs[i] * 255.).astype(numpy.uint8)).save(image_path)
+            seed_add += 1
+    except KeyboardInterrupt:
+        print('Generation Interrupted, running ESRGAN')
+        del engine0, engine1, engine2, context0, context1, context2, stream
+        stream = cuda.Stream()
+        with open(f"engines/esrgan1x{VQGAN_ASPECT}.trt", mode="rb") as f:
+            engine3 = runtime.deserialize_cuda_engine(f.read())
+            context3 = engine3.create_execution_context()
+        inputs, outputs, bindings = common.allocate_buffers(engine3)
+        for fname in os.listdir(DIR):
+            if not fname.startswith('sr_'):
+                lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
+                lr_image = np.array(lr_image)
+                lr_image = pad_reflect(lr_image, 15)
+                patches, p_shape = split_image_into_overlapping_patches(lr_image, patch_size=192, padding_size=24)
+                # 0,1,2,3 -> 0,2,1,3 -> 0,3,1,2
+                patches = np.swapaxes(np.swapaxes(patches, 1, 2), 1, 3)
+                numpy.copyto(inputs[0].host, patches.ravel() / 255.)
+                res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
+                np_sr_image = res.reshape(4, 1920, 1920 * VQGAN_ASPECT, 3)
+                padded_size_scaled = tuple(np.multiply(p_shape[0:2], 8)) + (3,)
+                scaled_image_shape = tuple(np.multiply(lr_image.shape[0:2], 8)) + (3,)
+                np_sr_image = stich_together(np_sr_image, padded_image_shape=padded_size_scaled, target_shape=scaled_image_shape, padding_size=24 * 8)
+                sr_img = (np_sr_image*255).astype(np.uint8)
+                sr_img = unpad_image(sr_img, 15*8)
+                print(fname)
+                Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
+                os.remove(os.path.join(DIR, fname))
