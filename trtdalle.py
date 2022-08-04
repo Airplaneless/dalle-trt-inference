@@ -93,7 +93,6 @@ if __name__ == '__main__':
     ort_outs = ort_session1.run(None, ort_inputs)
     encoder_state = torch.from_numpy(ort_outs[0])
     seed_add = 0
-    stream = cuda.Stream()
     tAM = HostDeviceMem(cuda.pagelocked_empty(128 * image_count, numpy.int32))
     tES = HostDeviceMem(cuda.pagelocked_empty(262144 * image_count, numpy.float32))
     tIT = HostDeviceMem(cuda.pagelocked_empty(1 * image_count, numpy.int32))
