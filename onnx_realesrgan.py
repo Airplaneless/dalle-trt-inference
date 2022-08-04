@@ -14,9 +14,10 @@ class RealESRGAN(torch.nn.Module):
         self.model = model
 
     def forward(self, img):
-        res = self.model(img[0:4])
-        for i in range(4, img.shape[0], 4):
-            res = torch.cat((res, self.model(img[i:i+4])), 0)
+        batch_size = 4
+        res = self.model(img[0:batch_size])
+        for i in range(batch_size, img.shape[0], batch_size):
+            res = torch.cat((res, self.model(img[i:i+batch_size])), 0)
         return res.permute((0,2,3,1)).clamp_(0, 1)
 
 
