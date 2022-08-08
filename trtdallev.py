@@ -137,6 +137,7 @@ if __name__ == '__main__':
                 numpy.copyto(tTI.host, to_numpy(token_indices[[ti]]).ravel())
                 cuda.memcpy_htod_async(tIT.device, tIT.host, stream)
                 cuda.memcpy_htod_async(tTI.device, tTI.host, stream)
+                stream.synchronize()
                 queue = [tAM, tES, tAS0, tIT, tTI, tDS, tAS0]
                 context0.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
                 stream.synchronize()
