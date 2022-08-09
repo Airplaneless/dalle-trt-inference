@@ -1,6 +1,7 @@
 #!/usr/bin/python
 import os
 import sys
+import argparse
 import numpy
 import pylab as plt
 import json
@@ -46,12 +47,55 @@ if __name__ == '__main__':
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     numpy.random.seed(42)
-    TEXT = str(sys.argv[1])
-    TEMPERATURE = float(sys.argv[2])
-    TOPK = int(sys.argv[3])
-    SFACTOR = int(sys.argv[4])
-    SEED = int(sys.argv[5])
-    DIR = str(sys.argv[6])
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--text',
+        type=str,
+        required=True
+    )
+    parser.add_argument(
+        '--temperature',
+        type=float,
+        default=1.0
+    )
+    parser.add_argument(
+        '--topk',
+        type=int,
+        default=2048
+    )
+    parser.add_argument(
+        '--topp',
+        type=float,
+        default=0.1
+    )
+    parser.add_argument(
+        '--sfactor',
+        type=float,
+        default=16.0
+    )
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=0
+    )
+    parser.add_argument(
+        '--dir',
+        type=str,
+        default='./renders'
+    )
+    parser.add_argument(
+        '--srgan',
+        action='store_true',
+    )
+    args = parser.parse_args()
+    TEXT = args.text
+    TEMPERATURE = args.temperature
+    TOPK = args.topk
+    TOPP = args.topp
+    SFACTOR = args.sfactor
+    SEED = args.sfactor
+    DIR = args.dir
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
     assert SEED >= 0
@@ -153,46 +197,60 @@ if __name__ == '__main__':
                 temperature = settings[[0]]
                 top_k = settings[[1]].to(torch.long)
                 supercondition_factor = settings[[2]]
-                logits = (
-                    logits[:image_count] * (1 - supercondition_factor) + 
-                    logits[image_count:] * supercondition_factor
-                )
-                logits_sorted, _ = logits.sort(descending=True)
-                is_kept = logits >= logits_sorted[:, top_k - 1]
-                logits -= logits_sorted[:, [0]]
-                logits /= temperature
-                logits.exp_()
-                logits *= is_kept.to(torch.float32)
-                image_tokens[i + 1] = torch.multinomial(logits, 1)[:, 0]
+                logits = logits[:image_count] * (1 - supercondition_factor) + logits[image_count:] * supercondition_factor
+                logits = logits[0]
+                _, pindices = logits.topk(logits.shape[0] - TOPK, largest=False)
+                probas = logits.softmax(-1)
+                min_val = min(probas.max().item(), TOPP)
+                logits[pindices] = 0
+                logits[probas < min_val] = 0
+                image_tokens[i + 1] = torch.multinomial(logits.softmax(-1), 1)[0]
             ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T.reshape(-1, 256))}
             image = ort_session2.run(None, ort_inputs)[0]
             image_path = os.path.join(DIR, f'image_{SEED + seed_add}_v.png')
             Image.fromarray((image[0]).astype(numpy.uint8)).save(image_path)
             seed_add += 1
     except KeyboardInterrupt:
-        print('\nGeneration Interrupted, running ESRGAN')
+        print(f'\nGeneration Interrupted, running {"ESRGAN" if args.srgan else "Real-ESRGAN"}')
         del engine0, engine1, engine2, context0, context1, context2, stream
         stream = cuda.Stream()
-        with open(f"engines/esrgan1x2.trt", mode="rb") as f:
-            engine3 = runtime.deserialize_cuda_engine(f.read())
-            context3 = engine3.create_execution_context()
+        if not args.srgan:
+            with open(f"engines/esrgan1x2.trt", mode="rb") as f:
+                engine3 = runtime.deserialize_cuda_engine(f.read())
+                context3 = engine3.create_execution_context()
+        else:
+            with open(f"engines/srgan1x2.trt", mode="rb") as f:
+                engine3 = runtime.deserialize_cuda_engine(f.read())
+                context3 = engine3.create_execution_context()  
         inputs, outputs, bindings = common.allocate_buffers(engine3)
         for fname in os.listdir(DIR):
             if fname.startswith('image_'):
-                lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
-                lr_image = numpy.array(lr_image).transpose((1,0,2))
-                lr_image = pad_reflect(lr_image, 15)
-                patches, p_shape = split_image_into_overlapping_patches(lr_image, patch_size=192, padding_size=24)
-                # 0,1,2,3 -> 0,2,1,3 -> 0,3,1,2
-                patches = numpy.swapaxes(numpy.swapaxes(patches, 1, 2), 1, 3)
-                numpy.copyto(inputs[0].host, patches.ravel() / 255.)
-                res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
-                np_sr_image = res.reshape(6, 1920, 1920, 3)
-                padded_size_scaled = tuple(numpy.multiply(p_shape[0:2], 8)) + (3,)
-                scaled_image_shape = tuple(numpy.multiply(lr_image.shape[0:2], 8)) + (3,)
-                np_sr_image = stich_together(np_sr_image, padded_image_shape=padded_size_scaled, target_shape=scaled_image_shape, padding_size=24 * 8)
-                sr_img = (np_sr_image*255).astype(numpy.uint8)
-                sr_img = unpad_image(sr_img, 15*8).transpose((1,0,2))
-                print(fname)
-                Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
-                os.remove(os.path.join(DIR, fname))
+                if not args.srgan:
+                    lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
+                    lr_image = numpy.array(lr_image).transpose((1,0,2))
+                    lr_image = pad_reflect(lr_image, 15)
+                    patches, p_shape = split_image_into_overlapping_patches(lr_image, patch_size=192, padding_size=24)
+                    # 0,1,2,3 -> 0,2,1,3 -> 0,3,1,2
+                    patches = numpy.swapaxes(numpy.swapaxes(patches, 1, 2), 1, 3)
+                    numpy.copyto(inputs[0].host, patches.ravel() / 255.)
+                    res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
+                    np_sr_image = res.reshape(6, 1920, 1920, 3)
+                    padded_size_scaled = tuple(numpy.multiply(p_shape[0:2], 8)) + (3,)
+                    scaled_image_shape = tuple(numpy.multiply(lr_image.shape[0:2], 8)) + (3,)
+                    np_sr_image = stich_together(np_sr_image, padded_image_shape=padded_size_scaled, target_shape=scaled_image_shape, padding_size=24 * 8)
+                    sr_img = (np_sr_image*255).astype(numpy.uint8)
+                    sr_img = unpad_image(sr_img, 15*8).transpose((1,0,2))
+                    print(fname)
+                    Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
+                    os.remove(os.path.join(DIR, fname))
+                else:
+                    lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
+                    lr_image = numpy.array(lr_image).transpose((1,0,2))
+                    numpy.copyto(inputs[0].host, numpy.moveaxis(lr_image[None], -1, 1).ravel() / 255.)
+                    res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
+                    np_sr_image = numpy.moveaxis(res.reshape(3, 256*4, -1), 0, -1).clip(0, 1)
+                    np_sr_image = numpy.moveaxis(np_sr_image, 0, 1)
+                    sr_img = (np_sr_image*255).astype(np.uint8)
+                    print(fname)
+                    Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
+                    os.remove(os.path.join(DIR, fname))
