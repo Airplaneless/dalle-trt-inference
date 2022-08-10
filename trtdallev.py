@@ -72,7 +72,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--sfactor',
         type=float,
-        default=16.0
+        default=32.0
     )
     parser.add_argument(
         '--seed',
@@ -89,18 +89,18 @@ if __name__ == '__main__':
         action='store_true',
     )
     args = parser.parse_args()
+    print(args)
     TEXT = args.text
     TEMPERATURE = args.temperature
     TOPK = args.topk
     TOPP = args.topp
     SFACTOR = args.sfactor
-    SEED = args.sfactor
+    SEED = args.seed
     DIR = args.dir
     DIR = os.path.abspath(DIR)
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
     assert SEED >= 0
     os.makedirs(DIR, exist_ok=True)
-    print(f"TEXT={TEXT}\nTEMPERATURE={TEMPERATURE}\nTOPK={TOPK}\nSFACTOR={SFACTOR}\nSEED={SEED}\nDIR={DIR}")
     with open('models/vocab.json', 'r', encoding='utf8') as f:
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
@@ -111,13 +111,13 @@ if __name__ == '__main__':
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
-    with open("engines/decoder0.trt", mode="rb") as f:
+    with open("engines/decoder0.trt32", mode="rb") as f:
         engine0 = runtime.deserialize_cuda_engine(f.read())
         context0 = engine0.create_execution_context()
     with open("engines/decoder1.trt", mode="rb") as f:
         engine1 = runtime.deserialize_cuda_engine(f.read())
         context1 = engine1.create_execution_context()
-    with open("engines/decoder2.trt32", mode="rb") as f:
+    with open("engines/decoder2.trt", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
     tokens = tokenizer.tokenize(TEXT, is_verbose=False)[:64]
@@ -223,6 +223,8 @@ if __name__ == '__main__':
                 engine3 = runtime.deserialize_cuda_engine(f.read())
                 context3 = engine3.create_execution_context()  
         inputs, outputs, bindings = common.allocate_buffers(engine3)
+        sr_dir = 'esrgan' if args.srgan else 'real-esrgan'
+        os.makedirs(os.path.join(DIR, sr_dir), exist_ok=True)
         for fname in os.listdir(DIR):
             if fname.startswith('image_'):
                 if not args.srgan:
@@ -233,7 +235,7 @@ if __name__ == '__main__':
                     # 0,1,2,3 -> 0,2,1,3 -> 0,3,1,2
                     patches = numpy.swapaxes(numpy.swapaxes(patches, 1, 2), 1, 3)
                     numpy.copyto(inputs[0].host, patches.ravel() / 255.)
-                    res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
+                    res = common.do_inference_v2(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
                     np_sr_image = res.reshape(6, 1920, 1920, 3)
                     padded_size_scaled = tuple(numpy.multiply(p_shape[0:2], 8)) + (3,)
                     scaled_image_shape = tuple(numpy.multiply(lr_image.shape[0:2], 8)) + (3,)
@@ -241,16 +243,14 @@ if __name__ == '__main__':
                     sr_img = (np_sr_image*255).astype(numpy.uint8)
                     sr_img = unpad_image(sr_img, 15*8).transpose((1,0,2))
                     print(fname)
-                    Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
-                    os.remove(os.path.join(DIR, fname))
+                    Image.fromarray(sr_img).save(os.path.join(DIR, sr_dir, fname))
                 else:
                     lr_image = Image.open(os.path.join(DIR, fname)).convert('RGB')
                     lr_image = numpy.array(lr_image).transpose((1,0,2))
                     numpy.copyto(inputs[0].host, numpy.moveaxis(lr_image[None], -1, 1).ravel() / 255.)
-                    res = common.do_inference(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
+                    res = common.do_inference_v2(context3, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)[0]
                     np_sr_image = numpy.moveaxis(res.reshape(3, 256*4, -1), 0, -1).clip(0, 1)
                     np_sr_image = numpy.moveaxis(np_sr_image, 0, 1)
                     sr_img = (np_sr_image*255).astype(np.uint8)
                     print(fname)
-                    Image.fromarray(sr_img).save(os.path.join(DIR, 'sr_' + fname))
-                    os.remove(os.path.join(DIR, fname))
+                    Image.fromarray(sr_img).save(os.path.join(DIR, sr_dir, fname))
