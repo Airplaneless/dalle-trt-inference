@@ -181,13 +181,10 @@ if __name__ == '__main__':
                 numpy.copyto(tTI.host, to_numpy(token_indices[[ti]]).ravel())
                 cuda.memcpy_htod_async(tIT.device, tIT.host, stream)
                 cuda.memcpy_htod_async(tTI.device, tTI.host, stream)
-                stream.synchronize()
                 queue = [tAM, tES, tAS0, tIT, tTI, tDS, tAS0]
                 context0.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
-                stream.synchronize()
                 queue = [tAM, tES, tDS, tAS1, tTI, tDS, tAS1]
                 context1.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
-                stream.synchronize()
                 queue = [tAM, tES, tDS, tAS2, tTI, tAS2, tOut]
                 context2.execute_async_v2(bindings=[v.device for v in queue], stream_handle=stream.handle)
                 cuda.memcpy_dtoh_async(tOut.host, tOut.device, stream)
