@@ -85,6 +85,11 @@ if __name__ == '__main__':
         default='./renders'
     )
     parser.add_argument(
+        '--fp32layer',
+        type=int,
+        default=0
+    )
+    parser.add_argument(
         '--srgan',
         action='store_true',
     )
@@ -97,8 +102,13 @@ if __name__ == '__main__':
     SFACTOR = args.sfactor
     SEED = args.seed
     DIR = args.dir
+    FP32ID = args.fp32layer
+    decoder_0 = '32' if FP32ID == 0 else ''
+    decoder_1 = '32' if FP32ID == 1 else ''
+    decoder_2 = '32' if FP32ID == 2 else ''
     DIR = os.path.abspath(DIR)
-    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ')))
+    suffix = f't{TEMPERATURE}_k{TOPK}_p{TOPP}_s{SFACTOR}_fp32id{FP32ID}'
+    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ') + suffix.split('_')))
     assert SEED >= 0
     os.makedirs(DIR, exist_ok=True)
     with open('models/vocab.json', 'r', encoding='utf8') as f:
@@ -111,13 +121,13 @@ if __name__ == '__main__':
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
-    with open("engines/decoder0.trt32", mode="rb") as f:
+    with open(f"engines/decoder0.trt{decoder_0}", mode="rb") as f:
         engine0 = runtime.deserialize_cuda_engine(f.read())
         context0 = engine0.create_execution_context()
-    with open("engines/decoder1.trt", mode="rb") as f:
+    with open(f"engines/decoder1.trt{decoder_1}", mode="rb") as f:
         engine1 = runtime.deserialize_cuda_engine(f.read())
         context1 = engine1.create_execution_context()
-    with open("engines/decoder2.trt", mode="rb") as f:
+    with open(f"engines/decoder2.trt{decoder_2}", mode="rb") as f:
         engine2 = runtime.deserialize_cuda_engine(f.read())
         context2 = engine2.create_execution_context()
     tokens = tokenizer.tokenize(TEXT, is_verbose=False)[:64]

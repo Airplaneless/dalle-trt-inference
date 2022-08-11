@@ -1,7 +1,12 @@
-onnx/
-engines/
-models/
 .vscode
 __pycache__
 *.pyc
 *.png
+*.pt
+*.pth
+*.trt
+*.trt32
+*.onnx
+*.zip
+onnx/encoder0
+onnx/encoder1
