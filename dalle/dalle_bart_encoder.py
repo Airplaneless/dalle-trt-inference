@@ -41,26 +41,16 @@ class AttentionBase(nn.Module):
         queries: FloatTensor,
         attention_mask: FloatTensor
     ) -> FloatTensor:
-        keys = keys.reshape(keys.shape[:2] + (self.head_count, -1))
-        values = values.reshape(values.shape[:2] + (self.head_count, -1))
-        queries = queries.reshape(queries.shape[:2] + (self.head_count, -1))
+        keys = keys.reshape([keys.shape[0], keys.shape[1], self.head_count, -1])
+        values = values.reshape([values.shape[0], values.shape[1], self.head_count, -1])
+        queries = queries.reshape([queries.shape[0], queries.shape[1], self.head_count, -1])
         queries /= queries.shape[-1] ** 0.5
-
         attention_bias = (1 - attention_mask) * -1e12
-        attention_weights: FloatTensor = torch.einsum(
-            'bqhc,bkhc->bhqk',
-            queries, 
-            keys
-        )
+        attention_weights = queries.transpose(1, 2).matmul(keys.transpose(1, 2).transpose(2, 3))
         attention_weights += attention_bias[:, None, None, :]
         attention_weights = torch.softmax(attention_weights, -1)
-        attention_output: FloatTensor = torch.einsum(
-            "bhqk,bkhc->bqhc",
-            attention_weights, 
-            values
-        )
-        shape = attention_output.shape[:2] + (self.embed_count,)
-        attention_output = attention_output.reshape(shape)
+        attention_output = (attention_weights.matmul(values.transpose(1, 2))).transpose(1,2)
+        attention_output = attention_output.reshape([attention_output.shape[0], attention_output.shape[1], self.embed_count])
         attention_output = self.out_proj.forward(attention_output)
         return attention_output
 
