@@ -62,12 +62,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--topk',
         type=int,
-        default=2048
+        default=256
     )
     parser.add_argument(
         '--topp',
         type=float,
-        default=0.1
+        default=0.0
     )
     parser.add_argument(
         '--sfactor',
