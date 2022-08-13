@@ -82,9 +82,16 @@ if __name__ == '__main__':
         default=1
     )
     parser.add_argument(
-        '--fp32layer',
-        type=int,
-        default=2
+        '--d0fp32',
+        action='store_true',
+    )
+    parser.add_argument(
+        '--d1fp32',
+        action='store_true',
+    )
+    parser.add_argument(
+        '--d2fp32',
+        action='store_true',
     )
     parser.add_argument(
         '--dir',
@@ -106,9 +113,9 @@ if __name__ == '__main__':
     INUM = args.num
     DIR = args.dir
     FP32ID = args.fp32layer
-    decoder_0 = '32' if FP32ID == 0 else ''
-    decoder_1 = '32' if FP32ID == 1 else ''
-    decoder_2 = '32' if FP32ID == 2 else ''
+    decoder_0 = '32' if args.d0fp32 else ''
+    decoder_1 = '32' if args.d1fp32 else ''
+    decoder_2 = '32' if args.d2fp32 else ''
     DIR = os.path.abspath(DIR)
     suffix = f't{TEMPERATURE}_k{TOPK}_p{TOPP}_s{SFACTOR}_fp32id{FP32ID}'
     DIR = os.path.join(DIR, '_'.join(TEXT.split(' ') + suffix.split('_')))
