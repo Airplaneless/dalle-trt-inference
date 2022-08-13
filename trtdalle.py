@@ -102,6 +102,14 @@ if __name__ == '__main__':
         '--srgan',
         action='store_true',
     )
+    parser.add_argument(
+        '--encoder_gpu',
+        action='store_true',
+    )
+    parser.add_argument(
+        '--vqgan_gpu',
+        action='store_true',
+    )
     args = parser.parse_args()
     print(args)
     TEXT = args.text
@@ -124,9 +132,9 @@ if __name__ == '__main__':
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
-    encoder = DalleBartEncoder(attention_head_count=32, embed_count=2048, glu_embed_count=4096, text_token_count=64, text_vocab_count=50272, layer_count=24, device='cpu').eval()
+    encoder = DalleBartEncoder(attention_head_count=32, embed_count=2048, glu_embed_count=4096, text_token_count=64, text_vocab_count=50272, layer_count=24, device='cpu').eval().to('cuda' if args.encoder_gpu else 'cpu')
     encoder.load_state_dict(torch.load('models/encoder.pt'), strict=False)
-    detokenizer = VQGanDetokenizer().eval()
+    detokenizer = VQGanDetokenizer().eval().to('cuda' if args.vqgan_gpu else 'cpu')
     detokenizer.load_state_dict(torch.load('models/detoker.pt'))
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
@@ -150,7 +158,7 @@ if __name__ == '__main__':
         dtype=torch.long, 
     )
     with torch.cuda.amp.autocast(dtype=torch.float32) and torch.no_grad():
-        encoder_state = encoder.forward(text_tokens)
+        encoder_state = encoder.forward(text_tokens.to('cuda' if args.encoder_gpu else 'cpu'))
     seed_add = 0
     tAM = HostDeviceMem(cuda.pagelocked_empty(128 * image_count, numpy.int32))
     tES = HostDeviceMem(cuda.pagelocked_empty(262144 * image_count, numpy.float32))
@@ -209,7 +217,7 @@ if __name__ == '__main__':
                 logits[probas < min_val] = 0
                 image_tokens[i + 1] = torch.multinomial(logits.softmax(-1), 1)[0]
             with torch.cuda.amp.autocast(dtype=torch.float32) and torch.no_grad():
-                z = image_tokens[1:].T.reshape(-1, 256)
+                z = image_tokens[1:].T.reshape(-1, 256).to('cuda' if args.vqgan_gpu else 'cpu')
                 z.clamp_(0, detokenizer.vocab_count - 1)
                 t1 = 1 * 2 ** 4
                 t2 = 1 * 2 ** 4
