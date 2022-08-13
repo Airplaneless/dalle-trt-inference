@@ -13,9 +13,7 @@ import tensorrt as trt
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 trt.init_libnvinfer_plugins(TRT_LOGGER, '')
 import common
-import onnxruntime
-onnxruntime.disable_telemetry_events()
-from dalle import TextTokenizer
+from dalle import TextTokenizer, DalleBartEncoder, VQGanDetokenizer
 from utils_sr import *
 from PIL import Image
 from tqdm import tqdm
@@ -86,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--fp32layer',
         type=int,
-        default=0
+        default=2
     )
     parser.add_argument(
         '--dir',
@@ -120,9 +118,10 @@ if __name__ == '__main__':
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
-    ort_session0 = onnxruntime.InferenceSession('./onnx/encoder0/encoder0.onnx', providers=['CPUExecutionProvider'])
-    ort_session1 = onnxruntime.InferenceSession('./onnx/encoder1/encoder1.onnx', providers=['CPUExecutionProvider'])
-    ort_session2 = onnxruntime.InferenceSession(f'engines/vqgan{INUM}x{INUM}.onnx', providers=['CPUExecutionProvider'])
+    encoder = DalleBartEncoder(attention_head_count=32, embed_count=2048, glu_embed_count=4096, text_token_count=64, text_vocab_count=50272, layer_count=24, device='cpu').eval()
+    encoder.load_state_dict(torch.load('models/encoder.pt'), strict=False)
+    detokenizer = VQGanDetokenizer().eval()
+    detokenizer.load_state_dict(torch.load('models/detoker.pt'))
     tokenizer = TextTokenizer(vocab, merges)
     runtime = trt.Runtime(TRT_LOGGER)
     stream = cuda.Stream()
@@ -144,11 +143,8 @@ if __name__ == '__main__':
         text_tokens, 
         dtype=torch.long, 
     )
-    ort_inputs = {ort_session0.get_inputs()[0].name: to_numpy(text_tokens)}
-    ort_outs = ort_session0.run(None, ort_inputs)
-    ort_inputs = {ort_session1.get_inputs()[0].name: to_numpy(ort_outs[0]), ort_session1.get_inputs()[1].name: to_numpy(text_tokens)}
-    ort_outs = ort_session1.run(None, ort_inputs)
-    encoder_state = torch.from_numpy(ort_outs[0])
+    with torch.cuda.amp.autocast(dtype=torch.float32) and torch.no_grad():
+        encoder_state = encoder.forward(text_tokens)
     seed_add = 0
     tAM = HostDeviceMem(cuda.pagelocked_empty(128 * image_count, numpy.int32))
     tES = HostDeviceMem(cuda.pagelocked_empty(262144 * image_count, numpy.float32))
@@ -206,8 +202,18 @@ if __name__ == '__main__':
                 logits[pindices] = 0
                 logits[probas < min_val] = 0
                 image_tokens[i + 1] = torch.multinomial(logits.softmax(-1), 1)[0]
-            ort_inputs = {ort_session2.get_inputs()[0].name: to_numpy(image_tokens[1:].T.reshape(-1, 256))}
-            images = ort_session2.run(None, ort_inputs)[0]
+            with torch.cuda.amp.autocast(dtype=torch.float32) and torch.no_grad():
+                z = image_tokens[1:].T.reshape(-1, 256)
+                z.clamp_(0, detokenizer.vocab_count - 1)
+                t1 = 1 * 2 ** 4
+                t2 = 1 * 2 ** 4
+                z = detokenizer.embedding.forward(z)
+                z = z.view((z.shape[0], t1, t2, 2 ** 8))
+                z = z.permute(0, 3, 1, 2).contiguous()
+                z = detokenizer.post_quant_conv.forward(z)
+                z = detokenizer.decoder.forward(z, t1, t2)
+                z = z.permute(0, 2, 3, 1)
+                images = (z.clip(0.0, 1.0) * 255).cpu().detach().numpy()
             image_outputs = []
             for i in range(images.shape[0]):
                 img = numpy.moveaxis(images[i][None], -1, 1).ravel() / 255.
