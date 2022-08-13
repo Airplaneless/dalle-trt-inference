@@ -127,7 +127,7 @@ if __name__ == '__main__':
         vocab = json.load(f)
     with open('models/merges.txt', 'r', encoding='utf8') as f:
         merges = f.read().split("\n")[1:-1]
-    encoder = DalleBartEncoder(attention_head_count=32, embed_count=2048, glu_embed_count=4096, text_token_count=64, text_vocab_count=50272, layer_count=24, device='cpu').eval().to('cuda' if args.encoder_gpu else 'cpu')
+    encoder = DalleBartEncoder(attention_head_count=32, embed_count=2048, glu_embed_count=4096, text_token_count=64, text_vocab_count=50272, layer_count=24, device='cuda' if args.encoder_gpu else 'cpu').eval().to('cuda' if args.encoder_gpu else 'cpu')
     encoder.load_state_dict(torch.load('models/encoder.pt'), strict=False)
     detokenizer = VQGanDetokenizer().eval().to('cuda' if args.vqgan_gpu else 'cpu')
     detokenizer.load_state_dict(torch.load('models/detoker.pt'))
