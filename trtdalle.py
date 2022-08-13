@@ -112,13 +112,12 @@ if __name__ == '__main__':
     SEED = args.seed
     INUM = args.num
     DIR = args.dir
-    FP32ID = args.fp32layer
     decoder_0 = '32' if args.d0fp32 else ''
     decoder_1 = '32' if args.d1fp32 else ''
     decoder_2 = '32' if args.d2fp32 else ''
     DIR = os.path.abspath(DIR)
-    suffix = f't{TEMPERATURE}_k{TOPK}_p{TOPP}_s{SFACTOR}_fp32id{FP32ID}'
-    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ') + suffix.split('_')))
+    suffix = [hex(hash(tuple(args._get_kwargs())))]
+    DIR = os.path.join(DIR, '_'.join(TEXT.split(' ') + suffix))
     assert INUM in [1, 2, 3, 4]
     os.makedirs(DIR, exist_ok=True)
     with open('models/vocab.json', 'r', encoding='utf8') as f:
